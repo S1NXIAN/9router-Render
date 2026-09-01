@@ -5,6 +5,7 @@ import ProviderIcon from "@/shared/components/ProviderIcon";
 import QuotaTable from "./QuotaTable";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
+import { getHotReloadConfig } from "@/shared/constants/config";
 import {
   parseQuotaData,
   calculatePercentage,
@@ -29,19 +30,25 @@ import {
   setQuotaCache,
   QUOTA_CACHE_KEY,
   REFRESH_INTERVAL_MS,
+  COUNTDOWN_SECONDS,
   CLAUDE_REFRESH_INTERVAL_MS,
   DEPLETED_QUOTA_THRESHOLD,
   AUTO_REFRESH_STORAGE_KEY,
+  ACCOUNT_FILTER_STORAGE_KEY,
+  PROVIDER_FILTER_STORAGE_KEY,
   CONNECTIONS_PAGE_SIZE,
   ACCOUNT_PAGE_SIZE_OPTIONS,
   ACCOUNT_PAGE_SIZE_MAX,
   ACCOUNT_FILTER_OPTIONS,
   QUOTA_SORT_OPTIONS,
 } from "./utils";
+import { createRefreshTimers, nextCountdown } from "./refreshTimers";
 import Card from "@/shared/components/Card";
+import { Badge } from "@/shared/components";
 import { ConfirmModal, EditConnectionModal } from "@/shared/components";
 import { USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { getQuotaPauseInfo } from "@/shared/utils/quotaPause.js";
 
 // Maps the stored providerSpecificData.authMethod to a human label for Kiro.
 // Values come from the Kiro connect flows: builder-id/idc (device code),
@@ -134,12 +141,14 @@ export default function ProviderLimits() {
   const [autoPingMaps, setAutoPingMaps] = useState({ claude: {}, codex: {} });
   const [lastUpdated, setLastUpdated] = useState(null);
   const [hasHydratedAutoRefresh, setHasHydratedAutoRefresh] = useState(false);
+  const [hasHydratedFilters, setHasHydratedFilters] = useState(false);
   const [refreshingAll, setRefreshingAll] = useState(false);
-  const [countdown, setCountdown] = useState(60);
+  const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
   const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState(null);
   const [togglingId, setTogglingId] = useState(null);
   const [resettingLimitId, setResettingLimitId] = useState(null);
+  const [hotReloadingId, setHotReloadingId] = useState(null);
   const [resetConfirmState, setResetConfirmState] = useState(null);
   const [resetCreditsState, setResetCreditsState] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -169,8 +178,6 @@ export default function ProviderLimits() {
     providerFilteredConnections: 0,
   });
 
-  const intervalRef = useRef(null);
-  const countdownRef = useRef(null);
   const tickCountRef = useRef(0);
 
   const fetchConnections = useCallback(
@@ -328,6 +335,28 @@ export default function ProviderLimits() {
     [fetchQuota, resettingLimitId],
   );
 
+  const handleHotReloadConnection = useCallback(async (connection) => {
+    if (hotReloadingId) return;
+    setHotReloadingId(connection.id);
+    setErrors((prev) => ({ ...prev, [connection.id]: null }));
+    try {
+      const res = await fetch(`/api/providers/${connection.id}/hotreload`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || "Hot reload failed");
+      }
+      if (data.reloaded !== true) {
+        throw new Error(data.error || "Hot reload did not move the quota count");
+      }
+      await fetchQuota(connection.id, connection.provider, { force: true });
+      setLastUpdated(new Date());
+    } catch (error) {
+      setErrors((prev) => ({ ...prev, [connection.id]: error.message || "Hot reload failed" }));
+    } finally {
+      setHotReloadingId(null);
+    }
+  }, [fetchQuota, hotReloadingId]);
+
   const handleViewCodexResetCredits = useCallback(async (connection) => {
     setResetCreditsState({ connection, loading: true, error: null, data: null });
     try {
@@ -448,6 +477,37 @@ export default function ProviderLimits() {
     [selectedConnection, fetchConnections, fetchQuota],
   );
 
+  // Update a single per-window quota pause threshold and reflect it locally.
+  const handleUpdateQuotaThreshold = useCallback(
+    async (connId, key, value) => {
+      const conn = connections.find((c) => c.id === connId);
+      if (!conn) return;
+      const prev =
+        conn.quotaPauseThresholds && typeof conn.quotaPauseThresholds === "object"
+          ? conn.quotaPauseThresholds
+          : {};
+      const next = { ...prev };
+      const v = Number(value);
+      if (Number.isFinite(v) && v > 0 && v <= 100) next[key] = v;
+      else delete next[key];
+      try {
+        const res = await fetch(`/api/providers/${connId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ quotaPauseThresholds: next }),
+        });
+        if (res.ok) {
+          setConnections((prevConns) =>
+            prevConns.map((c) => (c.id === connId ? { ...c, quotaPauseThresholds: next } : c)),
+          );
+        }
+      } catch (error) {
+        console.error("Error updating quota threshold:", error);
+      }
+    },
+    [connections],
+  );
+
   useEffect(() => {
     let cancelled = false;
     fetch("/api/proxy-pools?isActive=true", { cache: "no-store" })
@@ -467,7 +527,7 @@ export default function ProviderLimits() {
     if (refreshingAll) return;
 
     setRefreshingAll(true);
-    setCountdown(60);
+    setCountdown(COUNTDOWN_SECONDS);
 
     // Throttle Claude: poll its quota every Nth auto-tick (manual force bypasses)
     const tick = (tickCountRef.current += 1);
@@ -500,7 +560,47 @@ export default function ProviderLimits() {
     }
   }, [refreshingAll, fetchConnections, fetchQuota, page]);
 
+  // Restore saved filter preferences from localStorage on mount
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const storedAccount = window.localStorage.getItem(ACCOUNT_FILTER_STORAGE_KEY);
+      if (storedAccount && ["all", "active", "inactive"].includes(storedAccount)) {
+        setAccountFilter(storedAccount);
+      }
+      const storedProvider = window.localStorage.getItem(PROVIDER_FILTER_STORAGE_KEY);
+      if (storedProvider) {
+        setProviderFilter(storedProvider);
+      }
+    } catch (e) {
+      console.error("Error restoring quota filters:", e);
+    }
+    setHasHydratedFilters(true);
+  }, []);
+
+  // Persist account filter preference
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasHydratedFilters) return;
+    try {
+      window.localStorage.setItem(ACCOUNT_FILTER_STORAGE_KEY, accountFilter);
+    } catch (e) {
+      console.error("Error saving account filter:", e);
+    }
+  }, [accountFilter, hasHydratedFilters]);
+
+  // Persist provider filter preference
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasHydratedFilters) return;
+    try {
+      window.localStorage.setItem(PROVIDER_FILTER_STORAGE_KEY, providerFilter);
+    } catch (e) {
+      console.error("Error saving provider filter:", e);
+    }
+  }, [providerFilter, hasHydratedFilters]);
+
+  useEffect(() => {
+    if (!hasHydratedFilters) return;
+
     const initializeData = async () => {
       setConnectionsLoading(true);
       const visibleConnections = await fetchConnections(page);
@@ -522,7 +622,7 @@ export default function ProviderLimits() {
     };
 
     initializeData();
-  }, [fetchConnections, fetchQuota, page]);
+  }, [fetchConnections, fetchQuota, page, hasHydratedFilters]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -624,65 +724,54 @@ export default function ProviderLimits() {
     updateQuotaVisibility(next, previous);
   }, [quotaVisibility, updateQuotaVisibility]);
 
-  // Auto-refresh interval
+  // One owner for both intervals. `refreshAll` is read through a ref so a new
+  // identity does not tear the timers down and restart the 60s window.
+  const refreshAllRef = useRef(refreshAll);
   useEffect(() => {
-    if (!hasHydratedAutoRefresh || !autoRefresh) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      if (countdownRef.current) {
-        clearInterval(countdownRef.current);
-        countdownRef.current = null;
-      }
+    refreshAllRef.current = refreshAll;
+  }, [refreshAll]);
+
+  const timers = useMemo(
+    () =>
+      createRefreshTimers({
+        onRefresh: () => refreshAllRef.current(),
+        onTick: () => setCountdown((prev) => nextCountdown(prev, COUNTDOWN_SECONDS)),
+        refreshIntervalMs: REFRESH_INTERVAL_MS,
+      }),
+    []
+  );
+
+  // Auto-refresh interval. Nothing starts while the tab is hidden — the
+  // visibilitychange handler below owns the resume.
+  useEffect(() => {
+    if (!hasHydratedAutoRefresh || !autoRefresh || document.hidden) {
+      timers.stop();
       return;
     }
-
-    // Main refresh interval
-    intervalRef.current = setInterval(() => {
-      refreshAll();
-    }, REFRESH_INTERVAL_MS);
-
-    // Countdown interval
-    countdownRef.current = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) return 60;
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (countdownRef.current) clearInterval(countdownRef.current);
-    };
-  }, [autoRefresh, refreshAll, hasHydratedAutoRefresh]);
+    timers.start();
+    return () => timers.stop();
+  }, [autoRefresh, hasHydratedAutoRefresh, timers]);
 
   // Pause auto-refresh when tab is hidden (Page Visibility API)
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-        if (countdownRef.current) {
-          clearInterval(countdownRef.current);
-          countdownRef.current = null;
-        }
+        timers.stop();
       } else if (autoRefresh && hasHydratedAutoRefresh) {
-        // Resume auto-refresh when tab becomes visible
-        intervalRef.current = setInterval(() => refreshAll(), REFRESH_INTERVAL_MS);
-        countdownRef.current = setInterval(() => {
-          setCountdown((prev) => (prev <= 1 ? 60 : prev - 1));
-        }, 1000);
+        // `start` clears first, so repeated visible events cannot stack.
+        timers.start();
       }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      // A tab hidden at mount takes the effect above through its early return,
+      // which leaves no cleanup behind — so unmounting after a resume would
+      // otherwise leave both intervals running.
+      timers.stop();
     };
-  }, [autoRefresh, refreshAll, hasHydratedAutoRefresh]);
+  }, [autoRefresh, hasHydratedAutoRefresh, timers]);
 
   const sortedConnections = useMemo(
     () =>
@@ -1031,10 +1120,12 @@ export default function ProviderLimits() {
           const isCodex = conn.provider === "codex";
           const resetCreditCount = getCodexResetCreditCount(quota);
           const isResettingLimit = resettingLimitId === conn.id;
-          const rowBusy = deletingId === conn.id || togglingId === conn.id || isResettingLimit;
+          const isHotReloading = hotReloadingId === conn.id;
+          const rowBusy = deletingId === conn.id || togglingId === conn.id || isResettingLimit || isHotReloading;
           const rawQuotas = quota?.quotas || [];
           const visibleQuotas = filterQuotasByVisibility(conn.provider, rawQuotas, quotaVisibility);
           const hiddenQuotaRows = getHiddenQuotaRows(conn.provider, rawQuotas, quotaVisibility);
+          const quotaPauseInfo = getQuotaPauseInfo(conn);
 
           return (
             <Card
@@ -1070,6 +1161,18 @@ export default function ProviderLimits() {
                           {getConnectionSecondaryLabel(conn)}
                         </p>
                       ) : null}
+                      {quotaPauseInfo.enabled && (
+                        <p className="mt-0.5">
+                          <Badge
+                            variant={quotaPauseInfo.paused ? "warning" : "default"}
+                            size="sm"
+                          >
+                            {quotaPauseInfo.paused
+                              ? `Paused (quota${quotaPauseInfo.triggered ? `: ${quotaPauseInfo.triggered.key}` : ""})`
+                              : "Buffers set"}
+                          </Badge>
+                        </p>
+                      )}
                       {conn.provider === "kiro" && (
                         <div className="mt-1 flex flex-wrap items-center gap-1">
                           <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold text-brand-600 dark:text-brand-300">
@@ -1184,6 +1287,21 @@ export default function ProviderLimits() {
                         </span>
                       </button>
                     </Tooltip>
+                    {getHotReloadConfig(conn.provider, conn.authType) && (
+                      <Tooltip text={getHotReloadConfig(conn.provider, conn.authType)?.tooltip || "Hot reload quota countdown"}>
+                        <button
+                          type="button"
+                          onClick={() => handleHotReloadConnection(conn)}
+                          disabled={isLoading || rowBusy}
+                          aria-label="Hot reload quota countdown"
+                          className={`flex h-8 w-8 items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-text-muted hover:text-primary transition-colors disabled:opacity-50 ${isHotReloading ? "text-primary" : ""}`}
+                        >
+                          <span className={`material-symbols-outlined text-[18px] ${isHotReloading ? "animate-spin" : ""}`}>
+                            {isHotReloading ? "progress_activity" : "rocket_launch"}
+                          </span>
+                        </button>
+                      </Tooltip>
+                    )}
                     <Tooltip text="Edit connection">
                       <button
                         type="button"
@@ -1255,20 +1373,61 @@ export default function ProviderLimits() {
                     <p className="text-xs text-text-muted">{quota.message}</p>
                   </div>
                 ) : (
-                  <QuotaTable
-                    quotas={visibleQuotas}
-                    compact
-                    sortMode="default"
-                    showSortLabel={
-                      conn.provider === "codex" && quotaSortMode !== "default"
-                    }
-                    onHideQuota={(quotaRow) => handleHideQuota(conn.provider, quotaRow)}
-                  />
-                )}
-                {quota?.message && !error && !isLoading && (
-                  <p className="mt-2 px-1 text-[10px] leading-relaxed text-text-muted">
-                    {quota.message}
-                  </p>
+                  <>
+                    <QuotaTable
+                      quotas={visibleQuotas}
+                      compact
+                      sortMode="default"
+                      showSortLabel={
+                        conn.provider === "codex" && quotaSortMode !== "default"
+                      }
+                      onHideQuota={(quotaRow) => handleHideQuota(conn.provider, quotaRow)}
+                    />
+                    {conn.lastQuotaSnapshot?.windows?.length > 0 && (
+                      <div className="mt-2 border-t border-black/5 pt-2 dark:border-white/5">
+                        <p className="mb-1 text-[10px] text-text-muted">
+                          Pause buffer — pause this account when a window&apos;s remaining % ≤
+                        </p>
+                        <div className="flex flex-col gap-1">
+                          {conn.lastQuotaSnapshot.windows.map((w) => {
+                          const t = Number(conn.quotaPauseThresholds?.[w.key]) || 0;
+                          return (
+                            <div key={w.key} className="flex items-center gap-2">
+                              <span
+                                className="min-w-0 flex-1 truncate text-[11px] text-text-muted"
+                                title={w.key}
+                              >
+                                {w.key}
+                              </span>
+                              <span className="w-10 text-right text-[10px] tabular-nums text-text-muted">
+                                {typeof w.remainingPercentage === "number"
+                                  ? `${w.remainingPercentage}%`
+                                  : "—"}
+                              </span>
+                              <span className="text-[10px] text-text-muted">≤</span>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={t}
+                                onChange={(e) =>
+                                  handleUpdateQuotaThreshold(
+                                    conn.id,
+                                    w.key,
+                                    Number.parseInt(e.target.value, 10) || 0,
+                                  )
+                                }
+                                className="w-14 rounded border border-border bg-background px-1 py-0.5 text-[11px] focus:border-primary focus:outline-none"
+                                aria-label={`Pause buffer for ${w.key}`}
+                              />
+                              <span className="text-[10px] text-text-muted">%</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
                 )}
                 {hiddenQuotaRows.length > 0 && (
                   <div className="mt-2 flex min-w-0 items-center gap-1 border-t border-black/5 pt-2 text-[10px] text-text-muted dark:border-white/5">
