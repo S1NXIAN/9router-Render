@@ -18,6 +18,22 @@ process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
 if (!process.env.PORT) process.env.PORT = "20128";
 
 let backgroundRefreshStarted = false;
+let selfPingStarted = false;
+
+function startSelfPingFromCustomServer() {
+  if (selfPingStarted) return;
+  if (process.env.SELF_PING_ENABLED === "false") return;
+  if (process.env.NODE_ENV !== "production") return;
+  selfPingStarted = true;
+  const modPath = path.join(__dirname, "src", "lib", "selfPing.js");
+  import(pathToFileURL(modPath).href)
+    .then((m) => {
+      try {
+        m.startSelfPing();
+      } catch {}
+    })
+    .catch(() => {});
+}
 
 function startBackgroundTokenRefreshFromCustomServer() {
   if (backgroundRefreshStarted) return;
@@ -79,6 +95,7 @@ http.createServer = (...args) => {
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
     startBackgroundTokenRefreshFromCustomServer();
+    startSelfPingFromCustomServer();
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.

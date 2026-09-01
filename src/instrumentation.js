@@ -7,8 +7,10 @@ export async function register() {
     // node:fs into the dashboard's browser bundle.
     const { installCatalogSource } = await import("open-sse/providers/catalogOverride.js");
     await installCatalogSource();
-
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    const { startSelfPing } = await import("@/lib/selfPing.js");
+    startSelfPing();
   }
 }
