@@ -13,6 +13,10 @@ const origCreate = http.createServer.bind(http);
 const PEER_TOKEN = crypto.randomBytes(24).toString("hex");
 process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
 
+// Default PORT to 20128 for local `npm start` without env. Render injects PORT=10000 at runtime,
+// so this fallback never fires there — app respects $PORT on Render.
+if (!process.env.PORT) process.env.PORT = "20128";
+
 let backgroundRefreshStarted = false;
 
 function startBackgroundTokenRefreshFromCustomServer() {

@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: 9router
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOSTNAME
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: /app/data
+      # Render injects PORT=10000 automatically — do not set it here
+      - key: JWT_SECRET
+        generateValue: true
+      - key: INITIAL_PASSWORD
+        generateValue: true
+      - key: BASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_BASE_URL
+        sync: false
+      # Optional: set after first deploy to your https://xxx.onrender.com URL
+      # - key: CLOUD_URL
+      #   value: https://9router.com
+    # --- Persistent disk (requires Starter plan+) ---
+    # Free tier filesystem ephemeral — SQLite at /app/data lost on redeploy.
+    # Uncomment for persistence (1GB plenty).
+    # disk:
+    #   name: 9router-data
+    #   mountPath: /app/data
+    #   sizeGB: 1
+
+# Alternative: Native Node (no Docker). Uncomment to use instead of docker above.
+#  - type: web
+#    name: 9router-node
+#    env: node
+#    plan: free
+#    buildCommand: npm install && npm run build
+#    startCommand: npm start
+#    healthCheckPath: /health
+#    envVars:
+#      - key: NODE_VERSION
+#        value: 22.12.0
+#      - key: NODE_ENV
+#        value: production
+#      - key: HOSTNAME
+#        value: 0.0.0.0
+#      - key: DATA_DIR
+#        value: /opt/render/project/src/data
+#      - key: JWT_SECRET
+#        generateValue: true
+#      - key: INITIAL_PASSWORD
+#        generateValue: true

@@ -21,6 +21,8 @@ WORKDIR /app
 LABEL org.opencontainers.image.title="9router"
 
 ENV NODE_ENV=production
+# Render injects PORT=10000 at runtime — it overrides this default via env var.
+# Keep 20128 as local default for `docker run` without -e PORT.
 ENV PORT=20128
 ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -50,7 +52,7 @@ RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
   printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
-EXPOSE 20128
+EXPOSE 20128 10000
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "custom-server.js"]
