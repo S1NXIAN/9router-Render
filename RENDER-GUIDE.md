@@ -29,7 +29,7 @@ git push origin master # this repo is S1NXIAN/9router-Render
    - `SELF_PING_ENABLED=true` is internal keep-warm — leave as is.
 4. Click **Apply** → Render builds Docker image (5–10 min first time). Watch logs for `Creating an optimized production build ...` → `ready`.
 
-> **Region**: Blueprint defaults to `oregon` (US). To change, pick region in dropdown at Blueprint creation — it overrides `render.yaml`. No `region:` is hardcoded.
+> **Region**: `render.yaml` defaults to `singapore` (closest to SG/ASIA). Change `region:` to `oregon` (US), `frankfurt` (EU), `ohio` (US East), `virginia` — pick closest to you. Availability depends on plan (free may be limited to `singapore`/`oregon`). You can also override in Dashboard dropdown at Blueprint creation.
 
 ### 2.3 First login
 

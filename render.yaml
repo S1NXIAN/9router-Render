@@ -3,6 +3,7 @@ services:
     name: 9router
     env: docker
     plan: free
+    region: singapore # closest to SG/ASIA — change to oregon, frankfurt, ohio, virginia based on whats closest & plan availability
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
@@ -42,6 +43,7 @@ services:
 #    name: 9router-node
 #    env: node
 #    plan: free
+#    region: singapore # change to closest: oregon, frankfurt, ohio, virginia
 #    buildCommand: npm install && npm run build
 #    startCommand: npm start
 #    healthCheckPath: /health
