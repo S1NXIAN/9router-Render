@@ -18,7 +18,6 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: INITIAL_PASSWORD
-        sync: false
         generateValue: true
       # Keep Render free tier warm — pings /health every 14m (spin-down is 15m). Disable with false.
       - key: SELF_PING_ENABLED
@@ -61,5 +60,4 @@ services:
 #      - key: JWT_SECRET
 #        generateValue: true
 #      - key: INITIAL_PASSWORD
-#        sync: false
 #        generateValue: true
