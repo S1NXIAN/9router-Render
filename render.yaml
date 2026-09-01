@@ -19,13 +19,12 @@ services:
         generateValue: true
       - key: INITIAL_PASSWORD
         generateValue: true
-      - key: BASE_URL
-        sync: false
-      - key: NEXT_PUBLIC_BASE_URL
-        sync: false
-      # Optional: set after first deploy to your https://xxx.onrender.com URL
-      # - key: CLOUD_URL
-      #   value: https://9router.com
+      # BASE_URL / NEXT_PUBLIC_BASE_URL not set by default — app defaults to localhost.
+      # Set manually in Render Dashboard → Environment after first deploy if you need
+      # cloud sync / OAuth callbacks on your https://xxx.onrender.com URL:
+      #   BASE_URL=https://xxx.onrender.com
+      #   NEXT_PUBLIC_BASE_URL=https://xxx.onrender.com
+      #   CLOUD_URL=https://9router.com (optional)
     # --- Persistent disk (requires Starter plan+) ---
     # Free tier filesystem ephemeral — SQLite at /app/data lost on redeploy.
     # Uncomment for persistence (1GB plenty).
