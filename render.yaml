@@ -38,17 +38,15 @@ services:
     #   mountPath: /app/data
     #   sizeGB: 1
 
-# Alternative: Native Bun (no Docker). Uncomment to use instead of docker above.
+# Alternative: Native Node (no Docker). Uncomment to use instead of docker above.
 #  - type: web
-#    name: 9router-bun
+#    name: 9router-node
 #    env: node
 #    plan: free
-#    buildCommand: bun install && bun run build:bun
-#    startCommand: bun run start:bun
+#    buildCommand: npm install && npm run build
+#    startCommand: npm start
 #    healthCheckPath: /health
 #    envVars:
-#      - key: BUN_VERSION
-#        value: 1.2.0
 #      - key: NODE_VERSION
 #        value: 22.12.0
 #      - key: NODE_ENV
