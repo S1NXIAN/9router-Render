@@ -1,21 +1,22 @@
 # syntax=docker/dockerfile:1.7
-ARG NODE_IMAGE=node:22-alpine
-FROM ${NODE_IMAGE} AS base
+ARG BUN_IMAGE=oven/bun:1-alpine
+FROM ${BUN_IMAGE} AS base
 WORKDIR /app
 
 FROM base AS builder
 
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
+# Use bun for install/build (falls back to sql.js if better-sqlite3 fails, same as npm)
 COPY package.json ./
-RUN --mount=type=cache,target=/root/.npm \
-  npm install
+RUN --mount=type=cache,target=/root/.bun \
+  bun install
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN bun run build:bun
 
-FROM ${NODE_IMAGE} AS runner
+FROM ${BUN_IMAGE} AS runner
 WORKDIR /app
 
 LABEL org.opencontainers.image.title="9router"
@@ -43,16 +44,16 @@ COPY --from=builder /app/node_modules/next ./node_modules/next
 # so the last-resort DB driver would abort with ENOENT on the missing binary.
 COPY --from=builder /app/node_modules/sql.js ./node_modules/sql.js
 
-RUN mkdir -p /app/data && chown -R node:node /app && \
-  mkdir -p /app/data-home && chown node:node /app/data-home && \
+RUN mkdir -p /app/data && chown -R 1000:1000 /app 2>/dev/null || chown -R bun:bun /app 2>/dev/null || chown -R node:node /app 2>/dev/null || true && \
+  mkdir -p /app/data-home && chown 1000:1000 /app/data-home 2>/dev/null || chown bun:bun /app/data-home 2>/dev/null || chown node:node /app/data-home 2>/dev/null || true && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
-# Fix permissions at runtime (handles mounted volumes)
+# Fix permissions at runtime (handles mounted volumes) — try bun user, then node, then run as-is
 RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
-  printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
+  printf '#!/bin/sh\nchown -R 1000:1000 /app/data /app/data-home 2>/dev/null || true\nchown -R bun:bun /app/data /app/data-home 2>/dev/null || true\nchown -R node:node /app/data /app/data-home 2>/dev/null || true\nexec su-exec bun "$@" 2>/dev/null || exec su-exec node "$@" 2>/dev/null || exec "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
 EXPOSE 20128 10000
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["node", "custom-server.js"]
+CMD ["bun", "custom-server.js"]
