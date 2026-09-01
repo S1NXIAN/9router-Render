@@ -1,13 +1,13 @@
 let started = false;
 
-// ponytail: single setInterval, native fetch, no deps. Keeps Render free tier warm (15m spin-down).
-// Upgrade if needed: external cron (UptimeRobot) instead of in-process ping.
+// ponytail: in-process fetch /health every 14m, zero deps. Ceiling: cannot wake suspended container
+// — Render free tier halts process, setInterval stops, so internal ping alone cannot prevent cold start.
+// Upgrade: external pinger (Render Cron Job, UptimeRobot, or .github/workflows/keepwarm.yml) which runs outside container.
 export function startSelfPing() {
   if (started) return;
   if (process.env.SELF_PING_ENABLED === "false") return;
   if (process.env.NODE_ENV !== "production") return;
   started = true;
-
   const intervalMs = Math.max(60_000, parseInt(process.env.SELF_PING_INTERVAL_MS || "840000", 10)); // 14m default, <free spin-down (15m)
   const url =
     process.env.SELF_PING_URL ||

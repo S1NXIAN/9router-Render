@@ -23,6 +23,8 @@ services:
       # Keep Render free tier warm — pings /health every 14m (spin-down is 15m). Disable with false.
       - key: SELF_PING_ENABLED
         value: true
+      # External keep-warm (required to wake suspended container) — see .github/workflows/keepwarm.yml
+      # Set repo Variable RENDER_URL=https://xxx.onrender.com to enable GitHub Actions pinger.
       # BASE_URL / NEXT_PUBLIC_BASE_URL not set by default — app defaults to localhost.
       # Set manually in Render Dashboard → Environment after first deploy if you need
       # cloud sync / OAuth callbacks on your https://xxx.onrender.com URL:
