@@ -17,9 +17,7 @@ services:
       # Render injects PORT=10000 automatically — do not set it here
       - key: JWT_SECRET
         generateValue: true
-      - key: INITIAL_PASSWORD
-        generateValue: true
-      # Keep Render free tier warm — pings /health every 14m (spin-down is 15m). Disable with false.
+      # INITIAL_PASSWORD not set — defaults to 123456 on first boot, change in dashboard after login.
       - key: SELF_PING_ENABLED
         value: true
       # External keep-warm (required to wake suspended container) — see .github/workflows/keepwarm.yml
@@ -57,5 +55,4 @@ services:
 #        value: /opt/render/project/src/data
 #      - key: JWT_SECRET
 #        generateValue: true
-#      - key: INITIAL_PASSWORD
-#        generateValue: true
+#      # INITIAL_PASSWORD not set — defaults to 123456
