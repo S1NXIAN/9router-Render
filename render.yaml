@@ -18,6 +18,7 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: INITIAL_PASSWORD
+        sync: false
         generateValue: true
       # BASE_URL / NEXT_PUBLIC_BASE_URL not set by default — app defaults to localhost.
       # Set manually in Render Dashboard → Environment after first deploy if you need
@@ -55,4 +56,5 @@ services:
 #      - key: JWT_SECRET
 #        generateValue: true
 #      - key: INITIAL_PASSWORD
+#        sync: false
 #        generateValue: true
