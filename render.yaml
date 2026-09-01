@@ -17,12 +17,13 @@ services:
       # Render injects PORT=10000 automatically — do not set it here
       - key: JWT_SECRET
         generateValue: true
-      # INITIAL_PASSWORD not set — defaults to 123456 on first boot, change in dashboard after login.
+      - key: INITIAL_PASSWORD
+        sync: false
+      # Keep Render free tier warm — pings /health every 14m (spin-down is 15m). Disable with false.
       - key: SELF_PING_ENABLED
         value: true
       # External keep-warm (required to wake suspended container) — see .github/workflows/keepwarm.yml
       # Set repo Variable RENDER_URL=https://xxx.onrender.com to enable GitHub Actions pinger.
-      # BASE_URL / NEXT_PUBLIC_BASE_URL not set by default — app defaults to localhost.
       # Set manually in Render Dashboard → Environment after first deploy if you need
       # cloud sync / OAuth callbacks on your https://xxx.onrender.com URL:
       #   BASE_URL=https://xxx.onrender.com
@@ -55,4 +56,5 @@ services:
 #        value: /opt/render/project/src/data
 #      - key: JWT_SECRET
 #        generateValue: true
-#      # INITIAL_PASSWORD not set — defaults to 123456
+#      - key: INITIAL_PASSWORD
+#        sync: false
