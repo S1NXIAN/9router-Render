@@ -7,6 +7,7 @@ import Image from "next/image";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
+import { getHotReloadConfig } from "@/shared/constants/config";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
@@ -22,7 +23,6 @@ import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
-import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
@@ -33,6 +33,24 @@ const AUTO_PING_SETTINGS_KEYS = {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function RunSummary({ summary, running, currentId, connections }) {
+  if (!summary) return null;
+  return (
+    <div className="mb-4 rounded-lg border border-black/10 bg-black/[0.02] px-3 py-2 text-xs text-text-muted dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="flex flex-wrap items-center gap-3">
+        <span>Total: {summary.total}</span>
+        <span>Completed: {summary.completed}</span>
+        <span>Passed: {summary.passed}</span>
+        <span>Failed: {summary.failed}</span>
+        {summary.stopped && <span className="text-amber-600 dark:text-amber-400">Stopped</span>}
+        {running && currentId && (
+          <span>Running: {connections.find((c) => c.id === currentId)?.name || currentId}</span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function ProviderDetailPage() {
@@ -49,7 +67,6 @@ export default function ProviderDetailPage() {
   const [showAddApiKeyModal, setShowAddApiKeyModal] = useState(false);
   const [addConnectionError, setAddConnectionError] = useState("");
   const [showBulkImportCodex, setShowBulkImportCodex] = useState(false);
-  const [showBulkImportGrokCli, setShowBulkImportGrokCli] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showEditNodeModal, setShowEditNodeModal] = useState(false);
   const [showBulkProxyModal, setShowBulkProxyModal] = useState(false);
@@ -80,6 +97,12 @@ export default function ProviderDetailPage() {
   const [oneByOneResults, setOneByOneResults] = useState({});
   const [oneByOneSummary, setOneByOneSummary] = useState(null);
   const stopOneByOneRef = useRef(false);
+  const [hotReloadRunning, setHotReloadRunning] = useState(false);
+  const [hotReloadStopping, setHotReloadStopping] = useState(false);
+  const [hotReloadResults, setHotReloadResults] = useState({});
+  const stopHotReloadRef = useRef(false);
+  const [hotReloadCurrentConnectionId, setHotReloadCurrentConnectionId] = useState(null);
+  const [hotReloadSummary, setHotReloadSummary] = useState(null);
   const [importingQoderModels, setImportingQoderModels] = useState(false);
   const { copied, copy } = useCopyToClipboard();
 
@@ -133,9 +156,25 @@ export default function ProviderDetailPage() {
   const providerInfo = providerNode
     ? {
         id: providerNode.id,
-        name: providerNode.name || (providerNode.type === "anthropic-compatible" ? "Anthropic Compatible" : "OpenAI Compatible"),
-        color: providerNode.type === "anthropic-compatible" ? "#D97757" : "#10A37F",
-        textIcon: providerNode.type === "anthropic-compatible" ? "AC" : "OC",
+        name:
+          providerNode.name ||
+          (providerNode.type === "multi-compatible"
+            ? "Multi-protocol Compatible"
+            : providerNode.type === "anthropic-compatible"
+              ? "Anthropic Compatible"
+              : "OpenAI Compatible"),
+        color:
+          providerNode.type === "multi-compatible"
+            ? "#7C3AED"
+            : providerNode.type === "anthropic-compatible"
+              ? "#D97757"
+              : "#10A37F",
+        textIcon:
+          providerNode.type === "multi-compatible"
+            ? "MP"
+            : providerNode.type === "anthropic-compatible"
+              ? "AC"
+              : "OC",
         apiType: providerNode.apiType,
         baseUrl: providerNode.baseUrl,
         type: providerNode.type,
@@ -146,13 +185,14 @@ export default function ProviderDetailPage() {
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = providerId === "cursor" && liveModels.length > 0
+  const models = ["cursor", "devin"].includes(providerId) && liveModels.length > 0
     ? liveModels
     : staticModels;
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
   const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
+  const isMultiCompatible = providerNode?.type === "multi-compatible";
   const isCompatible = isOpenAICompatible || isAnthropicCompatible;
   const hasDualAuthModes = !isCompatible && isOAuth && supportsApiKeyAuth;
   const oauthConnectionLabel =
@@ -460,11 +500,11 @@ export default function ProviderDetailPage() {
     fetchDisabledModels();
   }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
 
-  // Cursor's model availability is account-specific and changes frequently.
+  // Cursor and Devin model availability is account-specific and changes frequently.
   // Load the active account's live catalog for the dashboard; the static
   // registry remains the fallback while the request is pending or unavailable.
   useEffect(() => {
-    if (providerId !== "cursor") {
+    if (!["cursor", "devin"].includes(providerId)) {
       setLiveModels([]);
       return;
     }
@@ -614,7 +654,7 @@ export default function ProviderDetailPage() {
   };
 
   const handleRunOneByOneTest = async () => {
-    if (oneByOneRunning || connections.length === 0) return;
+    if (oneByOneRunning || hotReloadRunning || connections.length === 0) return;
 
     const queuedState = Object.fromEntries(
       connections.map((connection) => [connection.id, { state: "queued", error: null }]),
@@ -626,6 +666,8 @@ export default function ProviderDetailPage() {
     setOneByOneCurrentConnectionId(null);
     setOneByOneResults(queuedState);
     setOneByOneSummary({ total: connections.length, completed: 0, passed: 0, failed: 0, stopped: false });
+    setHotReloadSummary(null);
+    setHotReloadResults({});
 
     let passed = 0;
     let failed = 0;
@@ -703,6 +745,73 @@ export default function ProviderDetailPage() {
     if (!oneByOneRunning) return;
     stopOneByOneRef.current = true;
     setOneByOneStopping(true);
+  };
+
+  const handleHotReload = async (connectionIds) => {
+    if (hotReloadRunning || oneByOneRunning || connectionIds.length === 0) return;
+    const ids = Array.isArray(connectionIds) ? connectionIds : [connectionIds];
+
+    stopHotReloadRef.current = false;
+    setHotReloadRunning(true);
+    setHotReloadStopping(false);
+    setHotReloadCurrentConnectionId(null);
+    setHotReloadResults((prev) => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = { state: "queued", error: null };
+      return next;
+    });
+    setHotReloadSummary({ total: ids.length, completed: 0, passed: 0, failed: 0, stopped: false });
+    setOneByOneSummary(null);
+    setOneByOneResults({});
+
+    let passed = 0;
+    let failed = 0;
+
+    for (const id of ids) {
+      if (stopHotReloadRef.current) {
+        setHotReloadSummary({ total: ids.length, completed: passed + failed, passed, failed, stopped: true });
+        break;
+      }
+      setHotReloadCurrentConnectionId(id);
+      setHotReloadResults((prev) => ({ ...prev, [id]: { state: "testing", error: null } }));
+
+      try {
+        const res = await fetch(`/api/providers/${id}/hotreload`, { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        const ok = data.ok !== false && data.reloaded === true;
+        // Partial: poke landed but the count did not move — surface which models failed.
+        const partial = data.ok !== false && data.reloaded !== true
+          && Array.isArray(data.failedModels) && data.failedModels.length > 0;
+        if (ok) passed += 1;
+        else failed += 1;
+        setHotReloadResults((prev) => ({
+          ...prev,
+          [id]: {
+            state: ok ? "success" : (partial ? "partial" : "failed"),
+            error: ok ? null : (data.error || (partial ? "Some models failed to hot reload" : "Hot reload did not move the quota count")),
+          },
+        }));
+      } catch (error) {
+        failed += 1;
+        setHotReloadResults((prev) => ({
+          ...prev,
+          [id]: { state: "failed", error: error.message || "Poke failed" },
+        }));
+      }
+
+      setHotReloadSummary({ total: ids.length, completed: passed + failed, passed, failed, stopped: false });
+    }
+
+    setHotReloadCurrentConnectionId(null);
+    setHotReloadRunning(false);
+    setHotReloadStopping(false);
+    stopHotReloadRef.current = false;
+  };
+
+  const handleStopHotReload = () => {
+    if (!hotReloadRunning) return;
+    stopHotReloadRef.current = true;
+    setHotReloadStopping(true);
   };
 
   const handleDelete = async (id) => {
@@ -993,7 +1102,12 @@ export default function ProviderDetailPage() {
                   setShowEditModal(true);
                 }}
                 onDelete={() => handleDelete(conn.id)}
+                hotReload={getHotReloadConfig(providerId, conn.authType) ? {
+                  running: hotReloadRunning || oneByOneRunning,
+                  onRun: () => handleHotReload(conn.id),
+                } : null}
                 oneByOneStatus={oneByOneResults[conn.id] || null}
+                hotReloadStatus={hotReloadResults[conn.id] || null}
               />
             </div>
           </div>
@@ -1265,6 +1379,7 @@ export default function ProviderDetailPage() {
 
   // Determine icon path: OpenAI Compatible providers use specialized icons
   const getHeaderIconPath = () => {
+    if (isMultiCompatible) return null;
     if (isOpenAICompatible && providerInfo.apiType) {
       return providerInfo.apiType === "responses" ? "/providers/oai-r.png" : "/providers/oai-cc.png";
     }
@@ -1361,11 +1476,33 @@ export default function ProviderDetailPage() {
         <Card>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold">{isAnthropicCompatible ? "Anthropic Compatible Details" : "OpenAI Compatible Details"}</h2>
-              <p className="break-all text-sm text-text-muted">
-                {isAnthropicCompatible ? "Messages API" : (providerNode.apiType === "responses" ? "Responses API" : "Chat Completions")} · {(providerNode.baseUrl || "").replace(/\/$/, "")}/
-                {isAnthropicCompatible ? "messages" : (providerNode.apiType === "responses" ? "responses" : "chat/completions")}
-              </p>
+              <h2 className="text-lg font-semibold">
+                {isMultiCompatible
+                  ? "Multi-protocol Compatible Details"
+                  : isAnthropicCompatible
+                    ? "Anthropic Compatible Details"
+                    : "OpenAI Compatible Details"}
+              </h2>
+              {isMultiCompatible ? (
+                <div className="flex flex-col gap-1 text-sm text-text-muted">
+                  {providerNode.transports?.map((transport) => (
+                    <p key={transport.format} className="break-all">
+                      {transport.format === "openai"
+                        ? "Chat Completions"
+                        : transport.format === "claude"
+                          ? "Anthropic Messages"
+                          : "OpenAI Responses"}
+                      {" · "}
+                      {transport.baseUrl}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <p className="break-all text-sm text-text-muted">
+                  {isAnthropicCompatible ? "Messages API" : (providerNode.apiType === "responses" ? "Responses API" : "Chat Completions")} · {(providerNode.baseUrl || "").replace(/\/$/, "")}/
+                  {isAnthropicCompatible ? "messages" : (providerNode.apiType === "responses" ? "responses" : "chat/completions")}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-1 gap-2 sm:flex sm:items-center">
               <Button
@@ -1395,7 +1532,7 @@ export default function ProviderDetailPage() {
                 onClick={async () => {
                   setConfirmState({
                     title: "Delete Compatible Node",
-                    message: `Delete this ${isAnthropicCompatible ? "Anthropic" : "OpenAI"} Compatible node?`,
+                    message: `Delete this ${isMultiCompatible ? "Multi-protocol" : isAnthropicCompatible ? "Anthropic" : "OpenAI"} Compatible node?`,
                     onConfirm: async () => {
                       setConfirmState(null);
                       try {
@@ -1453,10 +1590,34 @@ export default function ProviderDetailPage() {
                     variant="secondary"
                     icon="sync"
                     onClick={handleRunOneByOneTest}
-                    disabled={oneByOneRunning}
+                    disabled={oneByOneRunning || hotReloadRunning}
                   >
                     {oneByOneRunning ? "Testing Connection One-by-One..." : "Test Connection One-by-One"}
                   </Button>
+                  {getHotReloadConfig(providerId, "oauth") && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon="rocket_launch"
+                        onClick={() => handleHotReload(connections.filter((c) => getHotReloadConfig(providerId, c.authType)).map((c) => c.id))}
+                        disabled={hotReloadRunning || oneByOneRunning}
+                      >
+                        {hotReloadRunning ? "Hot Reloading..." : "Hot Reload All"}
+                      </Button>
+                      {hotReloadRunning && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon="stop"
+                          onClick={handleStopHotReload}
+                          disabled={hotReloadStopping}
+                        >
+                          {hotReloadStopping ? "Stopping..." : "Stop"}
+                        </Button>
+                      )}
+                    </>
+                  )}
                   {oneByOneRunning && (
                     <Button
                       size="sm"
@@ -1531,11 +1692,6 @@ export default function ProviderDetailPage() {
                         {translate("Bulk Add")}
                       </Button>
                     )}
-                    {providerId === "grok-cli" && (
-                      <Button size="sm" icon="playlist_add" variant="secondary" onClick={() => setShowBulkImportGrokCli(true)}>
-                        {translate("Bulk Add")}
-                      </Button>
-                    )}
                     <Button
                       size="sm"
                       icon="add"
@@ -1549,22 +1705,8 @@ export default function ProviderDetailPage() {
             </div>
           ) : (
             <>
-              {oneByOneSummary && (
-                <div className="mb-4 rounded-lg border border-black/10 bg-black/[0.02] px-3 py-2 text-xs text-text-muted dark:border-white/10 dark:bg-white/[0.03]">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span>Total: {oneByOneSummary.total}</span>
-                    <span>Completed: {oneByOneSummary.completed}</span>
-                    <span>Passed: {oneByOneSummary.passed}</span>
-                    <span>Failed: {oneByOneSummary.failed}</span>
-                    {oneByOneSummary.stopped && (
-                      <span className="text-amber-600 dark:text-amber-400">Stopped</span>
-                    )}
-                    {oneByOneRunning && oneByOneCurrentConnectionId && (
-                      <span>Running: {connections.find((conn) => conn.id === oneByOneCurrentConnectionId)?.name || oneByOneCurrentConnectionId}</span>
-                    )}
-                  </div>
-                </div>
-              )}
+              <RunSummary summary={oneByOneSummary} running={oneByOneRunning} currentId={oneByOneCurrentConnectionId} connections={connections} />
+              <RunSummary summary={hotReloadSummary} running={hotReloadRunning} currentId={hotReloadCurrentConnectionId} connections={connections} />
               {connections.length > 0 && (
                 <div className="mb-3 flex items-center gap-2 border-b border-black/[0.03] pb-2 dark:border-white/[0.03]">
                   <label className="flex cursor-pointer items-center gap-1.5 text-xs text-text-muted hover:text-primary">
@@ -1600,18 +1742,6 @@ export default function ProviderDetailPage() {
                       variant="secondary"
                       onClick={() => setShowBulkImportCodex(true)}
                       title={translate("Bulk import codex accounts from JSON")}
-                      className="w-full sm:w-auto"
-                    >
-                      {translate("Bulk Add")}
-                    </Button>
-                  )}
-                  {providerId === "grok-cli" && (
-                    <Button
-                      size="sm"
-                      icon="playlist_add"
-                      variant="secondary"
-                      onClick={() => setShowBulkImportGrokCli(true)}
-                      title={translate("Bulk import Grok CLI accounts from JSON")}
                       className="w-full sm:w-auto"
                     >
                       {translate("Bulk Add")}
@@ -1793,14 +1923,6 @@ export default function ProviderDetailPage() {
         <BulkImportCodexModal
           isOpen={showBulkImportCodex}
           onClose={() => setShowBulkImportCodex(false)}
-          onSuccess={fetchConnections}
-        />
-      )}
-
-      {providerId === "grok-cli" && (
-        <BulkImportGrokCliModal
-          isOpen={showBulkImportGrokCli}
-          onClose={() => setShowBulkImportGrokCli(false)}
           onSuccess={fetchConnections}
         />
       )}
