@@ -285,7 +285,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
             </Tooltip>
           )}
           {hotReload && (
-            <Tooltip text="Hot reload: poke both quota models so the pending 7-day countdown starts now">
+            <Tooltip text="Hot reload: poke one model per quota family so the pending 7-day countdown starts now">
               <button
                 onClick={hotReload.onRun}
                 disabled={hotReload.running}

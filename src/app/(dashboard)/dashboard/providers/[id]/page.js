@@ -7,7 +7,7 @@ import Image from "next/image";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
-import { getHotReloadConfig } from "@/shared/constants/config";
+import { getHotReloadConfig, getStuckFamilies } from "@/shared/constants/config";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
@@ -778,17 +778,26 @@ export default function ProviderDetailPage() {
       try {
         const res = await fetch(`/api/providers/${id}/hotreload`, { method: "POST" });
         const data = await res.json().catch(() => ({}));
+        const hasFamilies = data.perFamily && typeof data.perFamily === "object";
+        const famList = hasFamilies ? Object.values(data.perFamily) : [];
+        // Backend verdict is per-model (ANY family moved = reloaded); a stuck
+        // sibling only downgrades the badge to partial, never to failed.
+        const allFamOk = hasFamilies ? famList.length > 0 && famList.every((f) => f?.reloaded) : true;
+        const anyFamOk = hasFamilies ? famList.some((f) => f?.reloaded) : false;
+        const stuckFams = getStuckFamilies(data.perFamily);
         const ok = data.ok !== false && data.reloaded === true;
-        // Partial: poke landed but the count did not move — surface which models failed.
-        const partial = data.ok !== false && data.reloaded !== true
-          && Array.isArray(data.failedModels) && data.failedModels.length > 0;
+        // Partial: all families moved is success; anything landed short of that
+        // (one stuck family, a failed poke) warns instead of failing.
+        const partial = data.ok !== false && (ok
+          ? !allFamOk
+          : (anyFamOk || (Array.isArray(data.failedModels) && data.failedModels.length > 0)));
         if (ok) passed += 1;
         else failed += 1;
         setHotReloadResults((prev) => ({
           ...prev,
           [id]: {
-            state: ok ? "success" : (partial ? "partial" : "failed"),
-            error: ok ? null : (data.error || (partial ? "Some models failed to hot reload" : "Hot reload did not move the quota count")),
+            state: ok ? (partial ? "partial" : "success") : (partial ? "partial" : "failed"),
+            error: ok && !partial ? null : (data.error || (stuckFams.length > 0 ? `Partial hot reload: stuck (${stuckFams.join(", ")})` : (partial ? "Some models failed to hot reload" : "Hot reload did not move the quota count"))),
           },
         }));
       } catch (error) {

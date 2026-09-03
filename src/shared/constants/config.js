@@ -95,11 +95,25 @@ export const QUOTA_AUTOPING_CONFIG = {
 // Quota hot-reload: one location for all hot-reloadable providers + target models.
 // Add a provider key here and it automatically enables the button in providers/[id]
 // page, per-row ConnectionRow, QuotaTracker, and the backend /hotreload route.
+//
+// Antigravity quota comes in two shared families: every gemini/* model draws from
+// one counter, claude/* + gpt-oss/* share another. One representative poke per
+// family is enough; `models` stays as the flattened list for existing callers.
 export const HOT_RELOAD_CONFIG = {
   providers: {
     antigravity: {
       authType: "oauth",
-      models: ["gemini-3.5-flash-extra-low", "gpt-oss-120b-medium"],
+      models: ["gemini-3.8-flash-low", "gpt-oss-120b-medium"],
+      families: {
+        gemini: {
+          representative: "gemini-3.8-flash-low",
+          fallback: "gemini-3.7-flash-low",
+        },
+        "claude-oss": {
+          representative: "gpt-oss-120b-medium",
+          fallback: null,
+        },
+      },
       tooltip: "Hot reload: poke the quota models so the pending 7-day countdown starts now",
     },
   },
@@ -108,6 +122,12 @@ export const HOT_RELOAD_CONFIG = {
 export const getHotReloadConfig = (provider, authType = "oauth") => {
   const cfg = HOT_RELOAD_CONFIG.providers[provider];
   return cfg && (!cfg.authType || cfg.authType === authType) ? cfg : null;
+};
+
+/** Family names in a hot-reload `perFamily` map whose counter did not move. */
+export const getStuckFamilies = (perFamily) => {
+  if (!perFamily || typeof perFamily !== "object") return [];
+  return Object.entries(perFamily).filter(([, f]) => !f?.reloaded).map(([name]) => name);
 };
 
 // Re-export from providers.js for backward compatibility

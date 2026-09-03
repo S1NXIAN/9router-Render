@@ -5,7 +5,7 @@ import ProviderIcon from "@/shared/components/ProviderIcon";
 import QuotaTable from "./QuotaTable";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
-import { getHotReloadConfig } from "@/shared/constants/config";
+import { getHotReloadConfig, getStuckFamilies } from "@/shared/constants/config";
 import {
   parseQuotaData,
   calculatePercentage,
@@ -345,11 +345,18 @@ export default function ProviderLimits() {
       if (!res.ok || data.ok === false) {
         throw new Error(data.error || "Hot reload failed");
       }
-      if (data.reloaded !== true) {
-        throw new Error(data.error || "Hot reload did not move the quota count");
+      if (data.reloaded === true) {
+        await fetchQuota(connection.id, connection.provider, { force: true });
+        setLastUpdated(new Date());
+        // Partial success: one family moved while another stayed stuck — the
+        // refresh above already shows the moved counter, keep a warning visible.
+        const stuck = getStuckFamilies(data.perFamily);
+        if (stuck.length > 0) {
+          setErrors((prev) => ({ ...prev, [connection.id]: `Partial hot reload: reloaded, but stuck (${stuck.join(", ")}). ${data.error || ""}`.trim() }));
+        }
+        return;
       }
-      await fetchQuota(connection.id, connection.provider, { force: true });
-      setLastUpdated(new Date());
+      throw new Error(data.error || "Hot reload did not move the quota count");
     } catch (error) {
       setErrors((prev) => ({ ...prev, [connection.id]: error.message || "Hot reload failed" }));
     } finally {
